@@ -294,6 +294,26 @@ def build_datasets(cfg: DataConfig) -> DatasetBundle:
     train_ds = TradCharDataset(train_s, build_transforms(cfg, train=True))
     test_ds = TradCharDataset(test_s, build_transforms(cfg, train=False))
 
+    # 5. record exactly which (image, font) ended up in the test set, so a
+    #    scoring run can later reproduce per-font evaluation without re-deriving
+    #    the split. The manifest is both written to disk and carried in `meta`
+    #    (and therefore inside any checkpoint that saves `meta`).
+    test_manifest = [
+        {"path": p, "trad_id": idx2id[label], "label": label,
+         "char": char_of.get(idx2id[label], ""), "font": font}
+        for (p, label, font) in test_s
+    ]
+    os.makedirs(cfg.data_root, exist_ok=True)
+    manifest_path = os.path.join(
+        cfg.data_root, f"test_manifest_{cfg.mode}_{cfg.split_strategy}.csv"
+    )
+    with open(manifest_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=["path", "trad_id", "label", "char", "font"]
+        )
+        writer.writeheader()
+        writer.writerows(test_manifest)
+
     meta = {
         "mode": cfg.mode,
         "num_classes": len(included),
@@ -304,11 +324,15 @@ def build_datasets(cfg: DataConfig) -> DatasetBundle:
         "idx2id": idx2id,
         "char_of": char_of,
         "split_strategy": cfg.split_strategy,
+        "holdout_font": cfg.holdout_font if cfg.split_strategy == "leave_font_out" else None,
         "n_train": len(train_s),
         "n_test": len(test_s),
         "n_dropped_no_image": len(dropped),
         "dropped_ids": dropped,
+        "test_manifest": test_manifest,        # per-entry: path, trad_id, label, char, font
+        "test_manifest_path": manifest_path,
     }
+    print(f"[dataset] wrote test manifest -> {manifest_path}")
     if dropped:
         print(f"[dataset] warning: {len(dropped)} trad_ids had no image and "
               f"were excluded from the label space (first few: {dropped[:5]})")
