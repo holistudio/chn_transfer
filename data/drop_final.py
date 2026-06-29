@@ -2,7 +2,7 @@ import ast
 import pandas as pd
 from pathlib import Path
 
-DATA_DIR = Path(__file__).parent
+DATA_DIR = Path('./data')
 CLEAN_DIR = DATA_DIR / "clean"
 CLEAN_DIR.mkdir(exist_ok=True)
 
