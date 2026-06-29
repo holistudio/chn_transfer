@@ -33,10 +33,11 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.nn as nn
 from PIL import Image
 
 from .dataset import DataConfig, build_transforms
-from .model import LinearSoftmax
+from .model import LinearSoftmax, build_resnet
 
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +73,7 @@ def _resolve_report_path(cfg: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Loading
 # --------------------------------------------------------------------------- #
-def load_model(ckpt_path: str, device: torch.device) -> Tuple[LinearSoftmax, dict]:
+def load_model(ckpt_path: str, device: torch.device) -> Tuple[nn.Module, dict]:
     ckpt = torch.load(ckpt_path, map_location=device)
     meta = ckpt["meta"]
 
@@ -81,6 +82,8 @@ def load_model(ckpt_path: str, device: torch.device) -> Tuple[LinearSoftmax, dic
     model_type = meta.get("model_type", "linear_softmax")   # fallback for old checkpoints
     if model_type == "linear_softmax":
         model = LinearSoftmax(in_dim=meta["in_dim"], num_classes=meta["num_classes"])
+    elif model_type in ("resnet", "cnn"):
+        model = build_resnet(meta, **meta.get("model_params", {}))
     else:
         raise ValueError(
             f"Checkpoint was trained with model_type={model_type!r} which is not "
@@ -113,7 +116,7 @@ def _load_manifest(meta: dict, manifest_path: Optional[str]) -> List[dict]:
 # Scoring (unchanged from original)
 # --------------------------------------------------------------------------- #
 @torch.no_grad()
-def predict_image(model: LinearSoftmax, meta: dict, image_path: str,
+def predict_image(model: nn.Module, meta: dict, image_path: str,
                   device: torch.device, tfm, topk: int = 5
                   ) -> Tuple[torch.Tensor, torch.Tensor, List[dict]]:
     """Returns (logits, probs, topk_list) for one image; topk maps back to trad_ids."""
@@ -155,7 +158,7 @@ def _finalize(stats: dict) -> dict:
 
 
 @torch.no_grad()
-def evaluate_manifest(model: LinearSoftmax, meta: dict, manifest: List[dict],
+def evaluate_manifest(model: nn.Module, meta: dict, manifest: List[dict],
                       device: torch.device, topk: int = 5) -> dict:
     """Run every test entry through the model and build a per-entry + aggregate report."""
     cfg_inner = DataConfig(img_size=meta["img_size"], channels=meta["channels"], augment=False)
