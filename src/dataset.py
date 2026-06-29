@@ -32,6 +32,7 @@ Sample = Tuple[str, int, str]
 @dataclass
 class DataConfig:
     data_root: str = "./data/"                     # contains the csv and img/
+    manifest_dir: str = "./reports/"               # contains the test manifest
     csv_name: str = "trad_simpl_clean.csv"
     img_subdir: str = "img"
 
@@ -303,9 +304,9 @@ def build_datasets(cfg: DataConfig) -> DatasetBundle:
          "char": char_of.get(idx2id[label], ""), "font": font}
         for (p, label, font) in test_s
     ]
-    os.makedirs(cfg.data_root, exist_ok=True)
+    os.makedirs(cfg.manifest_dir, exist_ok=True)
     manifest_path = os.path.join(
-        cfg.data_root, f"test_manifest_{cfg.mode}_{cfg.split_strategy}.csv"
+        cfg.manifest_dir, f"test_manifest_{cfg.mode}_{cfg.split_strategy}.csv"
     )
     with open(manifest_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
