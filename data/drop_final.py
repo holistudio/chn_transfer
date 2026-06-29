@@ -8,12 +8,15 @@ CLEAN_DIR.mkdir(exist_ok=True)
 
 TOP_N = 3500
 
-df = pd.read_csv(DATA_DIR / "processed" / "trad_simpl_agg.csv")
+df = pd.read_csv(DATA_DIR / "processed" / "trad_simpl_filled.csv")
 
-# df = df.dropna(subset=["trad_id", "trad_unicode"])
-df = df.dropna()
+df = df.dropna(subset=["trad_id", "simpl_stroke_count"])
+# df = df.dropna()
 df = df.sort_values("trad_freq", ascending=False)
 df = df.head(TOP_N)
+
+for col in ("trad_freq", "simpl_freq", "trad_stroke_count", "simpl_stroke_count"):
+    df[col] = df[col].astype("Int64")  # nullable int dtype - keeps NaNs as <NA> instead of forcing floats
 
 def quote_field(value, force_quote=False):
     if pd.isna(value):
