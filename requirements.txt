@@ -1,0 +1,11 @@
+# install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pandas
+requests
+matplotlib
+seaborn
+scipy
+statsmodels
+scikit-learn
+ipywidgets
+ipykernel
+tqdm
