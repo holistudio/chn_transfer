@@ -50,10 +50,16 @@ $(PROC)/trad_simpl_agg.csv: $(SCRIPTS)/agg_table.py \
                             $(PROC)/simpl_freq.csv | $(PROC)
 	$(PYTHON) $(SCRIPTS)/agg_table.py
 
-# --- Stage 4: clean / final -------------------------------------------------
+# --- Stage 4: fill missing trad/simpl chars via OpenCC -----------------------
+
+$(PROC)/trad_simpl_filled.csv: $(SCRIPTS)/fill_table.py \
+                               $(PROC)/trad_simpl_agg.csv | $(PROC)
+	$(PYTHON) $(SCRIPTS)/fill_table.py
+
+# --- Stage 5: clean / final -------------------------------------------------
 
 $(CLEAN)/trad_simpl_clean.csv: $(SCRIPTS)/drop_final.py \
-                               $(PROC)/trad_simpl_agg.csv
+                               $(PROC)/trad_simpl_filled.csv
 	$(PYTHON) $(SCRIPTS)/drop_final.py
 
 # --- Helpers ----------------------------------------------------------------
@@ -74,4 +80,5 @@ clean:
 	      $(PROC)/simpl_equivalent.csv \
 	      $(PROC)/trad_id_freq.csv \
 	      $(PROC)/trad_simpl_agg.csv \
+	      $(PROC)/trad_simpl_filled.csv \
 	      $(CLEAN)/trad_simpl_clean.csv
