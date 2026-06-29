@@ -282,6 +282,8 @@ def main() -> int:
     written = skipped_existing = skipped_missing_glyph = skipped_empty = 0
     rows_processed = 0
     missing_records: list[tuple[str, str, str, str]] = []  # (trad_id, kind, char, font_label)
+    seen_trad_ids: dict[str, int] = {}  # trad_id -> count of rows claiming it
+    rows_with_no_trad_image: list[str] = []  # trad_id of rows where trad_char rendered in zero fonts
 
     # Count rows first so the progress bar has a total (cheap; file is small).
     with open(csv_path, newline="", encoding="utf-8") as fh:
@@ -314,6 +316,13 @@ def main() -> int:
                 continue
 
             rows_processed += 1
+            seen_trad_ids[trad_id] = seen_trad_ids.get(trad_id, 0) + 1
+            if seen_trad_ids[trad_id] > 1:
+                log.warning(
+                    "Duplicate trad_id %r seen %d time(s) in the CSV; rows share one "
+                    "output folder and earlier images may be overwritten/skipped.",
+                    trad_id, seen_trad_ids[trad_id],
+                )
             row_dir = os.path.join(out_dir, trad_id)
             os.makedirs(row_dir, exist_ok=True)
 
@@ -326,6 +335,7 @@ def main() -> int:
                     log.warning("Row %s flagged 'diff' but simpl_char is empty; "
                                 "no simpl image generated.", trad_id)
 
+            trad_written_for_row = 0
             for prefix, char in jobs:
                 for font in fonts:
                     fname = f"{prefix}_{trad_id}_{font['label']}.{IMAGE_EXT}"
@@ -333,6 +343,8 @@ def main() -> int:
 
                     if SKIP_EXISTING and os.path.exists(out_path):
                         skipped_existing += 1
+                        if prefix == "trad":
+                            trad_written_for_row += 1
                         continue
 
                     if not font_has_glyph(font["path"], font["index"], char):
@@ -345,9 +357,19 @@ def main() -> int:
                     try:
                         render_char_image(char, font["path"], font["index"], out_path)
                         written += 1
+                        if prefix == "trad":
+                            trad_written_for_row += 1
                     except Exception as exc:  # pragma: no cover - defensive
                         log.warning("Failed to render '%s' (%s/%s) with '%s': %s",
                                     char, trad_id, prefix, font["label"], exc)
+
+            if trad_written_for_row == 0:
+                rows_with_no_trad_image.append(trad_id)
+                log.warning(
+                    "Row %s ('%s') produced zero trad images across all %d font(s); "
+                    "its output folder may be empty or missing expected images.",
+                    trad_id, trad_char, len(fonts),
+                )
 
     # Optional: dump the list of characters that were skipped for missing glyphs.
     if WRITE_MISSING_LOG and missing_records:
@@ -358,15 +380,32 @@ def main() -> int:
             w.writerows(missing_records)
         log.info("Wrote missing-glyph log: %s (%d entries)", log_path, len(missing_records))
 
+    duplicate_ids = {tid: n for tid, n in seen_trad_ids.items() if n > 1}
+    distinct_folders = len(seen_trad_ids)
+
     # Summary.
     log.info("-" * 60)
     log.info("Done.")
     log.info("  Rows processed              : %d", rows_processed)
+    log.info("  Distinct trad_id folders    : %d", distinct_folders)
     log.info("  Fonts used                  : %s", ", ".join(f["label"] for f in fonts))
     log.info("  Images written              : %d", written)
     log.info("  Skipped (already existed)   : %d", skipped_existing)
     log.info("  Skipped (missing glyph)     : %d", skipped_missing_glyph)
     log.info("  Output directory            : %s", os.path.abspath(out_dir))
+    if duplicate_ids:
+        log.warning(
+            "Found %d duplicate trad_id value(s) accounting for the gap between "
+            "rows processed (%d) and distinct folders (%d): %s",
+            len(duplicate_ids), rows_processed, distinct_folders,
+            ", ".join(f"{tid} x{n}" for tid, n in duplicate_ids.items()),
+        )
+    if rows_with_no_trad_image:
+        log.warning(
+            "%d row(s) ended up with zero trad images written/kept (folder may be "
+            "empty): %s",
+            len(rows_with_no_trad_image), ", ".join(rows_with_no_trad_image),
+        )
     return 0
 
 
