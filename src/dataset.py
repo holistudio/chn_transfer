@@ -74,6 +74,25 @@ def _parse_flags(raw: str) -> List[str]:
         return []
 
 
+def select_diff_only_trad_ids(csv_path: str) -> List[Tuple[str, str, str]]:
+    """
+    Return an *ordered* list of (trad_id, trad_char, simpl_char) for rows whose
+    `flags` column is exactly `['diff']` (no other flags, e.g. many-to-one).
+    """
+    ids: List[Tuple[str, str, str]] = []
+    seen = set()
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tid = row["trad_id"].strip()
+            if not tid or tid in seen:
+                continue
+            if _parse_flags(row.get("flags", "")) != ["diff"]:
+                continue
+            seen.add(tid)
+            ids.append((tid, row.get("trad_char", "").strip(), row.get("simpl_char", "").strip()))
+    return ids
+
+
 def select_trad_ids(csv_path: str, mode: str) -> List[Tuple[str, str]]:
     """
     Return an *ordered* list of (trad_id, trad_char) for the chosen mode.
@@ -101,10 +120,10 @@ def select_trad_ids(csv_path: str, mode: str) -> List[Tuple[str, str]]:
 # --------------------------------------------------------------------------- #
 # File discovery
 # --------------------------------------------------------------------------- #
-def _font_of(filename: str, trad_id: str) -> str:
+def _font_of(filename: str, trad_id: str, kind: str = "trad") -> str:
     """trad_A04679_NotoSerifCJK.png -> 'NotoSerifCJK'."""
     base = os.path.splitext(os.path.basename(filename))[0]   # trad_A04679_NotoSerifCJK
-    prefix = f"trad_{trad_id}_"
+    prefix = f"{kind}_{trad_id}_"
     return base[len(prefix):] if base.startswith(prefix) else base
 
 
@@ -127,6 +146,29 @@ def collect_images(img_root: str, trad_ids: List[Tuple[str, str]]
             dropped.append(tid)
             continue
         images_by_id[tid] = [(p, _font_of(p, tid)) for p in paths]
+    return images_by_id, dropped
+
+
+def collect_simpl_images(img_root: str, trad_ids: List[Tuple[str, str, str]]
+                         ) -> Tuple[Dict[str, List[Tuple[str, str]]], List[str]]:
+    """
+    For each requested trad_id, glob its `simpl_*.png` files (the simplified
+    rendering that lives alongside the traditional one in the same subfolder).
+
+    Returns
+    -------
+    images_by_id : {trad_id: [(path, font), ...]}  only ids that have >=1 image
+    dropped      : list of trad_ids that had no simplified image on disk
+    """
+    images_by_id: Dict[str, List[Tuple[str, str]]] = {}
+    dropped: List[str] = []
+    for tid, _trad_char, _simpl_char in trad_ids:
+        pattern = os.path.join(img_root, tid, f"simpl_{tid}_*.png")
+        paths = sorted(glob.glob(pattern))
+        if not paths:
+            dropped.append(tid)
+            continue
+        images_by_id[tid] = [(p, _font_of(p, tid, kind="simpl")) for p in paths]
     return images_by_id, dropped
 
 
@@ -252,6 +294,75 @@ class TradCharDataset(Dataset):
         path, label, _font = self.samples[i]
         img = Image.open(path).convert("L")     # force grayscale
         return self.transform(img), label
+
+
+class SimplCharEvalDataset(Dataset):
+    """
+    Maps a *simplified*-character image to the label of its traditional
+    counterpart, so a closed-set classifier trained on traditional glyphs can
+    be probed for whether it (wrongly) recognises the simplified form too.
+
+    Only covers trad_ids whose `flags` column is exactly `['diff']` (the
+    simplified glyph differs from the traditional one, and isn't tangled up
+    in a many-to-one merge), and always includes every font.
+    """
+
+    def __init__(self, samples: List[Sample], transform: transforms.Compose):
+        self.samples = samples
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, i: int) -> Tuple[torch.Tensor, int]:
+        path, label, _font = self.samples[i]
+        img = Image.open(path).convert("L")     # force grayscale
+        return self.transform(img), label
+
+
+def build_simpl_eval_dataset(cfg: DataConfig, id2idx: Dict[str, int]
+                             ) -> Tuple[SimplCharEvalDataset, dict]:
+    """
+    Build the diff-only simplified-character eval set, labelled against an
+    existing trained model's `id2idx` so predictions line up with its classes.
+    """
+    diff_rows = select_diff_only_trad_ids(cfg.csv_path)
+    simpl_char_of = {tid: simpl_char for tid, _trad_char, simpl_char in diff_rows}
+    images_by_id, dropped_no_image = collect_simpl_images(
+        cfg.img_root, diff_rows
+    )
+
+    samples: List[Sample] = []
+    dropped_not_in_label_space: List[str] = []
+    included_tids: List[str] = []
+    for tid, imgs in images_by_id.items():
+        if tid not in id2idx:
+            dropped_not_in_label_space.append(tid)
+            continue
+        label = id2idx[tid]
+        included_tids.append(tid)
+        for p, font in imgs:
+            samples.append((p, label, font))
+
+    if not samples:
+        raise RuntimeError(
+            f"No simplified eval images found under {cfg.img_root!r} that "
+            "both have a ['diff']-only flag and a trad_id known to id2idx."
+        )
+
+    ds = SimplCharEvalDataset(samples, build_transforms(cfg, train=False))
+    meta = {
+        "n_samples": len(samples),
+        "n_trad_ids": len(included_tids),
+        "simpl_char_of": simpl_char_of,
+        "dropped_no_image": dropped_no_image,
+        "dropped_not_in_label_space": dropped_not_in_label_space,
+    }
+    print(f"[dataset] simpl eval set: {len(samples)} images across "
+          f"{len(included_tids)} trad_ids "
+          f"(dropped {len(dropped_no_image)} no-image, "
+          f"{len(dropped_not_in_label_space)} not in label space)")
+    return ds, meta
 
 
 # --------------------------------------------------------------------------- #
