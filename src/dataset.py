@@ -365,6 +365,51 @@ def build_simpl_eval_dataset(cfg: DataConfig, id2idx: Dict[str, int]
     return ds, meta
 
 
+def build_trad_eval_dataset(cfg: DataConfig, id2idx: Dict[str, int]
+                             ) -> Tuple[TradCharDataset, dict]:
+    """
+    Build the diff-only *traditional*-character eval set, labelled against an
+    existing trained model's `id2idx`.  Mirrors build_simpl_eval_dataset but
+    uses trad_*.png images so the two sets can be compared directly.
+    """
+    diff_rows = select_diff_only_trad_ids(cfg.csv_path)
+    trad_char_of = {tid: trad_char for tid, trad_char, _simpl_char in diff_rows}
+    trad_pairs = [(tid, trad_char) for tid, trad_char, _ in diff_rows]
+    images_by_id, dropped_no_image = collect_images(cfg.img_root, trad_pairs)
+
+    samples: List[Sample] = []
+    dropped_not_in_label_space: List[str] = []
+    included_tids: List[str] = []
+    for tid, imgs in images_by_id.items():
+        if tid not in id2idx:
+            dropped_not_in_label_space.append(tid)
+            continue
+        label = id2idx[tid]
+        included_tids.append(tid)
+        for p, font in imgs:
+            samples.append((p, label, font))
+
+    if not samples:
+        raise RuntimeError(
+            f"No traditional eval images found under {cfg.img_root!r} that "
+            "both have a ['diff']-only flag and a trad_id known to id2idx."
+        )
+
+    ds = TradCharDataset(samples, build_transforms(cfg, train=False))
+    meta = {
+        "n_samples": len(samples),
+        "n_trad_ids": len(included_tids),
+        "trad_char_of": trad_char_of,
+        "dropped_no_image": dropped_no_image,
+        "dropped_not_in_label_space": dropped_not_in_label_space,
+    }
+    print(f"[dataset] trad eval set: {len(samples)} images across "
+          f"{len(included_tids)} trad_ids "
+          f"(dropped {len(dropped_no_image)} no-image, "
+          f"{len(dropped_not_in_label_space)} not in label space)")
+    return ds, meta
+
+
 # --------------------------------------------------------------------------- #
 # Top-level builder
 # --------------------------------------------------------------------------- #
