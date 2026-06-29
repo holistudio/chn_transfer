@@ -2,7 +2,9 @@
 import os
 
 IMG_ROOT = "./data/img"          # adjust to your path
-FONTS = ["LXGWWenKai", "NotoSansCJK", "NotoSerifCJK", "Xiaolai"]
+FONTS = ["LXGWWenKai", "NotoSansCJK", "NotoSerifCJK", "Xiaolai", 
+         "MaokenAssortedSans", "GNUUnifont",
+         "HanyiSentyTangType", "HanyiSentyWen"]
 
 for tid in sorted(os.listdir(IMG_ROOT)):
     folder = os.path.join(IMG_ROOT, tid)
