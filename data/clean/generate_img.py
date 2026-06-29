@@ -57,16 +57,16 @@ VERBOSE = False
 
 # Paths updated to match your WSL2 environment based on fc-list
 FONTS = [
-    {
-        "label": "ARPLUKai",
-        "trad":  {"path": "/usr/share/fonts/truetype/arphic/ukai.ttc", "prefer_subfamily": "TW"},
-        "simpl": {"path": "/usr/share/fonts/truetype/arphic/ukai.ttc", "prefer_subfamily": "CN"},
-    },
-    {
-        "label": "ARPLUMing",
-        "trad":  {"path": "/usr/share/fonts/truetype/arphic/uming.ttc", "prefer_subfamily": "TW"},
-        "simpl": {"path": "/usr/share/fonts/truetype/arphic/uming.ttc", "prefer_subfamily": "CN"},
-    },
+    # {
+    #     "label": "ARPLUKai",
+    #     "trad":  {"path": "/usr/share/fonts/truetype/arphic/ukai.ttc", "prefer_subfamily": "TW"},
+    #     "simpl": {"path": "/usr/share/fonts/truetype/arphic/ukai.ttc", "prefer_subfamily": "CN"},
+    # },
+    # {
+    #     "label": "ARPLUMing",
+    #     "trad":  {"path": "/usr/share/fonts/truetype/arphic/uming.ttc", "prefer_subfamily": "TW"},
+    #     "simpl": {"path": "/usr/share/fonts/truetype/arphic/uming.ttc", "prefer_subfamily": "CN"},
+    # },
     # {
     #     "label": "LXGWBright",
     #     "trad":  {"path": "~/.local/share/fonts/LXGWBrightTC-Regular.ttf"},
@@ -74,13 +74,13 @@ FONTS = [
     # },
     {
         "label": "HanyiSentyWen",
-        "trad":  {"path": "~/.local/share/fonts/SentyWEN2017.ttf"},
-        "simpl": {"path": "~/.local/share/fonts/SentyWEN2017.ttf"},
+        "trad":  {"path": "~/.local/share/fonts/SentyWEN2017.ttf", "scale": 1.1},
+        "simpl": {"path": "~/.local/share/fonts/SentyWEN2017.ttf", "scale": 1.1},
     },
     {
         "label": "HanyiSentyTangType",
-        "trad":  {"path": "~/.local/share/fonts/HanyiSentyTang.ttf"},
-        "simpl": {"path": "~/.local/share/fonts/HanyiSentyTang.ttf"},
+        "trad":  {"path": "~/.local/share/fonts/HanyiSentyTang.ttf", "scale": 1.2},
+        "simpl": {"path": "~/.local/share/fonts/HanyiSentyTang.ttf", "scale": 1.2},
     },
     {
         "label": "MaokenAssortedSans",
@@ -130,6 +130,10 @@ logging.basicConfig(
 log = logging.getLogger("char_dataset")
 
 def parse_flags(raw: str) -> list:
+    """Parse the stringified-list `flags` cell into a real list.
+
+    Handles '', '[]', "['diff']", "['diff', 'many-to-one']", etc.
+    """
     raw = (raw or "").strip()
     if not raw:
         return []
@@ -141,11 +145,14 @@ def parse_flags(raw: str) -> list:
         return ["diff"] if "diff" in raw else []
 
 def resolve_face_index(path: str, configured_index: int, prefer_subfamily: str | None) -> int:
+    """For a .ttc/.otc collection, pick the sub-face whose name contains
+    `prefer_subfamily` (e.g. 'TC'). Falls back to `configured_index`."""
     if not prefer_subfamily:
         return configured_index
     if not path.lower().endswith((".ttc", ".otc")):
         return configured_index
     if not _HAVE_FONTTOOLS:
+        log.debug("fonttools not available; using index %d for %s", configured_index, path)
         return configured_index
 
     needle = f" {prefer_subfamily}".lower()
@@ -155,17 +162,26 @@ def resolve_face_index(path: str, configured_index: int, prefer_subfamily: str |
             name_table = font["name"]
             full_name = name_table.getDebugName(4) or name_table.getDebugName(1) or ""
             if needle in f" {full_name}".lower():
+                log.debug("Resolved %s face '%s' -> index %d", prefer_subfamily, full_name, i)
                 return i
+        log.warning(
+            "No '%s' sub-face found in %s; using index %d.",
+            prefer_subfamily, path, configured_index,
+        )
     except Exception as exc:
         log.warning("Could not inspect faces of %s (%s); using index %d.", path, exc, configured_index)
     return configured_index
 
 @lru_cache(maxsize=None)
 def load_font(path: str, index: int, size: int) -> ImageFont.FreeTypeFont:
+    """Cached PIL font loader."""
+    print(f"DEBUG: Loading {os.path.basename(path)} at size {size}")
     return ImageFont.truetype(path, size=size, index=index)
 
 @lru_cache(maxsize=None)
 def font_has_glyph(path: str, index: int, char: str) -> bool:
+    """True if the font face can display `char`. If fonttools is missing or
+    coverage checking is off, this optimistically returns True."""
     if not (_HAVE_FONTTOOLS and CHECK_GLYPH_COVERAGE):
         return True
     try:
@@ -174,20 +190,45 @@ def font_has_glyph(path: str, index: int, char: str) -> bool:
         return ord(char) in cmap
     except Exception:
         return True
+    
+def check_for_clipping(img: Image.Image, font_label: str, char: str) -> bool:
+    """Returns True if any black pixels are found on the 1px inner border."""
+    width, height = img.size
+    # Convert to grayscale to easily check for "black" (thresholding)
+    gray = img.convert("L")
+    
+    # Check top and bottom rows
+    for x in range(width):
+        if gray.getpixel((x, 0)) < 128 or gray.getpixel((x, height - 1)) < 128:
+            return True
+    # Check left and right columns
+    for y in range(height):
+        if gray.getpixel((0, y)) < 128 or gray.getpixel((width - 1, y)) < 128:
+            return True
+    return False
 
-def render_char_image(char: str, font_path: str, face_index: int, out_path: str) -> None:
+def render_char_image(char: str, font_path: str, face_index: int, out_path: str, scale: float = 1.0) -> None:
+    """Render a single centered character to `out_path`."""
     ss = max(1, int(SUPERSAMPLE))
     canvas = IMG_SIZE * ss
-    font = load_font(font_path, face_index, int(FONT_SIZE * ss))
+    
+    target_size = int(FONT_SIZE * ss * scale)
+    font = load_font(font_path, face_index, target_size)
 
     img = Image.new("RGB", (canvas, canvas), BG_COLOR)
     draw = ImageDraw.Draw(img)
 
     left, top, right, bottom = draw.textbbox((0, 0), char, font=font)
     glyph_w, glyph_h = right - left, bottom - top
+    
     x = (canvas - glyph_w) // 2 - left
     y = (canvas - glyph_h) // 2 - top
     draw.text((x, y), char, font=font, fill=FG_COLOR)
+
+    # --- WARNING MECHANISM ---
+    if check_for_clipping(img, "label", char):
+        log.warning("Clipping detected for char '%s' with font scale %.1f", char, scale)
+    # -------------------------
 
     if ss != 1:
         img = img.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
@@ -217,6 +258,7 @@ def prepare_fonts() -> list[dict]:
             if side_key in spec:
                 side_spec = spec[side_key]
                 path = side_spec.get("path") or spec.get("path")
+                scale = side_spec.get("scale", spec.get("scale", 1.0))
                 
                 if not path:
                     log.warning("Font '%s' (%s) is missing a 'path' key.", label, side_key)
@@ -226,7 +268,7 @@ def prepare_fonts() -> list[dict]:
                 if os.path.isfile(path):
                     idx = side_spec.get("index", spec.get("index", 0))
                     subfam = side_spec.get("prefer_subfamily", spec.get("prefer_subfamily"))
-                    return {"path": path, "index": resolve_face_index(path, idx, subfam)}
+                    return {"path": path, "index": resolve_face_index(path, idx, subfam), "scale": scale}
                 else:
                     log.warning("Font file not found for '%s' (%s): %s", label, side_key, path)
                     return None
@@ -258,14 +300,21 @@ def main() -> int:
         return 1
 
     fonts = prepare_fonts()
+    load_font.cache_clear()
     if not fonts:
         log.error("No usable fonts found.")
         return 1
+    if not (_HAVE_FONTTOOLS and CHECK_GLYPH_COVERAGE):
+        log.info("Glyph-coverage checking is OFF (fonttools missing or disabled); "
+                 "missing characters may render as blank boxes.")
 
     os.makedirs(out_dir, exist_ok=True)
 
     written = skipped_existing = skipped_missing_glyph = 0
     rows_processed = 0
+    missing_records: list[tuple[str, str, str, str]] = []  # (trad_id, kind, char, font_label)
+    seen_trad_ids: dict[str, int] = {}  # trad_id -> count of rows claiming it
+    rows_with_no_trad_image: list[str] = []  # trad_id of rows where trad_char rendered in zero fonts
     missing_records = []
     seen_trad_ids = {}
     rows_with_no_trad_image = []
@@ -277,7 +326,20 @@ def main() -> int:
 
     with open(csv_path, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
-        for row_index, row in enumerate(tqdm(reader, total=total_rows, desc="Rendering", unit="row")):
+        
+        # Define a custom format emphasizing the ETA
+        custom_bar_format = "{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [Elapsed: {elapsed} | ETA: {remaining}, {rate_fmt}]"
+        
+        pbar = tqdm(
+            reader, 
+            total=total_rows, 
+            desc="Rendering", 
+            unit="row",
+            bar_format=custom_bar_format,
+            dynamic_ncols=True
+        )
+        
+        for row_index, row in enumerate(pbar):
             if args.limit is not None and row_index >= args.limit:
                 break
             
@@ -286,17 +348,30 @@ def main() -> int:
             simpl_char = (row.get("simpl_char") or "").strip()
             flags = parse_flags(row.get("flags", ""))
 
-            if not trad_id or not trad_char:
+            if not trad_id:
+                log.warning("Row with empty trad_id skipped: %r", row)
                 continue
+            if not trad_char:
+                log.warning("Row %s has empty trad_char; skipped.", trad_id)
 
             rows_processed += 1
             seen_trad_ids[trad_id] = seen_trad_ids.get(trad_id, 0) + 1
+            if seen_trad_ids[trad_id] > 1:
+                log.warning(
+                    "Duplicate trad_id %r seen %d time(s) in the CSV; rows share one "
+                    "output folder and earlier images may be overwritten/skipped.",
+                    trad_id, seen_trad_ids[trad_id],
+                )
             row_dir = os.path.join(out_dir, trad_id)
             os.makedirs(row_dir, exist_ok=True)
 
             jobs = [("trad", trad_char)]
-            if "diff" in flags and simpl_char:
-                jobs.append(("simpl", simpl_char))
+            if "diff" in flags:
+                if simpl_char:
+                    jobs.append(("simpl", simpl_char))
+                else:
+                    log.warning("Row %s flagged 'diff' but simpl_char is empty; "
+                                "no simpl image generated.", trad_id)
 
             trad_written_for_row = 0
             for prefix, char in jobs:
@@ -322,7 +397,8 @@ def main() -> int:
                         continue
 
                     try:
-                        render_char_image(char, fpath, findex, out_path)
+                        scale_factor = side_config.get("scale", 1.0)
+                        render_char_image(char, fpath, findex, out_path, scale=scale_factor)
                         written += 1
                         if prefix == "trad":
                             trad_written_for_row += 1
@@ -332,6 +408,11 @@ def main() -> int:
 
             if trad_written_for_row == 0:
                 rows_with_no_trad_image.append(trad_id)
+                log.warning(
+                    "Row %s ('%s') produced zero trad images across all %d font(s); "
+                    "its output folder may be empty or missing expected images.",
+                    trad_id, trad_char, len(fonts),
+                )
 
     if WRITE_MISSING_LOG and missing_records:
         log_path = os.path.join(out_dir, "_missing_glyphs.csv")
@@ -339,12 +420,34 @@ def main() -> int:
             w = csv.writer(fh)
             w.writerow(["trad_id", "kind", "char", "font_label"])
             w.writerows(missing_records)
+        log.info("Wrote missing-glyph log: %s (%d entries)", log_path, len(missing_records))
+    
+    duplicate_ids = {tid: n for tid, n in seen_trad_ids.items() if n > 1}
+    distinct_folders = len(seen_trad_ids)
 
+    # Summary.
     log.info("-" * 60)
     log.info("Done.")
     log.info("  Rows processed              : %d", rows_processed)
+    log.info("  Distinct trad_id folders    : %d", distinct_folders)
+    log.info("  Fonts used                  : %s", ", ".join(f["label"] for f in fonts))
     log.info("  Images written              : %d", written)
     log.info("  Skipped (already existed)   : %d", skipped_existing)
+    log.info("  Skipped (missing glyph)     : %d", skipped_missing_glyph)
+    log.info("  Output directory            : %s", os.path.abspath(out_dir))
+    if duplicate_ids:
+        log.warning(
+            "Found %d duplicate trad_id value(s) accounting for the gap between "
+            "rows processed (%d) and distinct folders (%d): %s",
+            len(duplicate_ids), rows_processed, distinct_folders,
+            ", ".join(f"{tid} x{n}" for tid, n in duplicate_ids.items()),
+        )
+    if rows_with_no_trad_image:
+        log.warning(
+            "%d row(s) ended up with zero trad images written/kept (folder may be "
+            "empty): %s",
+            len(rows_with_no_trad_image), ", ".join(rows_with_no_trad_image),
+        )
     
     return 0
 
