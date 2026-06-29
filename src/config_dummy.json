@@ -1,0 +1,40 @@
+{
+  "data": {
+    "data_root": "./data/",
+    "manifest_dir": "./reports/",
+    "csv_name": "trad_simpl_clean.csv",
+    "img_subdir": "img",
+    "mode": "all",
+    "img_size": 128,
+    "channels": 1,
+    "train_ratio": 0.75,
+    "split_strategy": "stratified_random",
+    "augment": true,
+    "seed": 1337
+  },
+
+  "model": {
+    "type": "linear_softmax",
+    "params": {}
+  },
+
+  "training": {
+    "epochs": 40,
+    "batch_size": 128,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "num_workers": 4
+  },
+
+  "io": {
+    "checkpoints_dir": "checkpoints",
+    "reports_dir": "reports"
+  },
+
+  "predict": {
+    "checkpoint": null,
+    "manifest": null,
+    "topk": 5,
+    "single_image": null
+  }
+}
