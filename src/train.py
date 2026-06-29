@@ -50,21 +50,23 @@ def parse_args() -> argparse.Namespace:
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict:
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
+             criterion: nn.Module) -> dict:
     if len(loader.dataset) == 0:
-        return {"top1": float("nan"), "top5": float("nan"), "n": 0}
+        return {"loss": float("nan"), "top1": float("nan"), "top5": float("nan"), "n": 0}
     model.eval()
-    correct1 = correct5 = total = 0
+    loss_sum = correct1 = correct5 = total = 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         logits = model(x)
+        loss_sum += criterion(logits, y).item() * y.size(0)
         k = min(5, logits.size(1))
         top = logits.topk(k, dim=1).indices
         correct1 += (top[:, 0] == y).sum().item()
         correct5 += (top == y.unsqueeze(1)).any(dim=1).sum().item()
         total += y.size(0)
-    return {"top1": correct1 / total, "top5": correct5 / total, "n": total}
-
+    return {"loss": loss_sum / total, "top1": correct1 / total,
+            "top5": correct5 / total, "n": total}
 
 def main() -> None:
     args = parse_args()
@@ -122,10 +124,10 @@ def main() -> None:
 
         train_loss = running / max(total, 1)
         train_acc = correct / max(total, 1)
-        ev = evaluate(model, test_loader, device)
+        ev = evaluate(model, test_loader, device, criterion)
         print(f"epoch {epoch:3d}/{args.epochs}  "
               f"loss {train_loss:.4f}  train_acc {train_acc:.3f}  "
-              f"test_top1 {ev['top1']:.3f}  test_top5 {ev['top5']:.3f}")
+              f"test_loss {ev['loss']:.4f}  test_top1 {ev['top1']:.3f}  test_top5 {ev['top5']:.3f}")
 
         if ev["n"] > 0 and ev["top1"] > best_top1:
             best_top1 = ev["top1"]
