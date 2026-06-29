@@ -23,7 +23,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from .dataset import DataConfig, build_datasets
-from .model import build_model
+from .model import build_model, build_resnet
 
 
 # --------------------------------------------------------------------------- #
@@ -73,16 +73,13 @@ def build_model_from_config(cfg: dict, meta: dict) -> nn.Module:
             "Add an MLP class there and wire it up here."
         )
 
-    elif model_type == "cnn":
-        raise NotImplementedError(
-            "cnn is listed in the schema but not yet implemented in model.py. "
-            "Add a CNN class there and wire it up here."
-        )
+    elif model_type in ("resnet", "cnn"):
+        return build_resnet(meta, **params)         # params: layers, width
 
     else:
         raise ValueError(
             f"Unknown model.type {model_type!r}. "
-            "Expected one of: linear_softmax, mlp, cnn"
+            "Expected one of: linear_softmax, mlp, resnet"
         )
 
 
@@ -131,6 +128,7 @@ def main() -> None:
     bundle = build_datasets(data_cfg)
     meta = bundle.meta
     meta["model_type"] = model_type             # stored in checkpoint for predict.py
+    meta["model_params"] = cfg["model"].get("params", {})  # rebuild args for predict.py
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[train] device={device}  config={args.config}")
